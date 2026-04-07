@@ -1,0 +1,73 @@
+{
+  "actorSpecification": 1,
+  "fields": {},
+  "views": {
+    "overview": {
+      "title": "Overview",
+      "transformation": {
+        "fields": [
+          "position",
+          "tcin",
+          "title",
+          "brand",
+          "formatted_current_price",
+          "rating_average",
+          "rating_count",
+          "is_marketplace",
+          "item_type",
+          "buy_url",
+          "primary_image_url"
+        ]
+      },
+      "display": {
+        "component": "table",
+        "properties": {
+          "position": {
+            "label": "Position",
+            "format": "number"
+          },
+          "tcin": {
+            "label": "TCIN",
+            "format": "text"
+          },
+          "title": {
+            "label": "Title",
+            "format": "text"
+          },
+          "brand": {
+            "label": "Brand",
+            "format": "text"
+          },
+          "formatted_current_price": {
+            "label": "Price",
+            "format": "text"
+          },
+          "rating_average": {
+            "label": "Rating",
+            "format": "number"
+          },
+          "rating_count": {
+            "label": "Ratings",
+            "format": "number"
+          },
+          "is_marketplace": {
+            "label": "Marketplace",
+            "format": "text"
+          },
+          "item_type": {
+            "label": "Type",
+            "format": "text"
+          },
+          "buy_url": {
+            "label": "Product URL",
+            "format": "link"
+          },
+          "primary_image_url": {
+            "label": "Image",
+            "format": "image"
+          }
+        }
+      }
+    }
+  }
+}

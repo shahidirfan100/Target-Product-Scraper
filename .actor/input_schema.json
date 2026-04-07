@@ -1,0 +1,74 @@
+{
+  "title": "Target Product Scraper",
+  "description": "Extract product results from Target listing URLs or keywords with pagination and sorting controls.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startUrl": {
+      "title": "Start URL",
+      "type": "string",
+      "description": "Optional Target listing URL. If provided, keyword and page context are inferred from this URL unless explicitly overridden.",
+      "editor": "textfield",
+      "prefill": "https://www.target.com/s?searchTerm=womens+tops&category=0%7CAll%7Cmatchallpartial%7Call+categories&searchTermRaw=womw"
+    },
+    "keyword": {
+      "title": "Keyword",
+      "type": "string",
+      "description": "Search keyword used to collect products.",
+      "editor": "textfield",
+      "prefill": "womens tops"
+    },
+    "sort_by": {
+      "title": "Sort By",
+      "type": "string",
+      "description": "Sort mode for product results.",
+      "editor": "select",
+      "default": "relevance",
+      "prefill": "relevance",
+      "enum": [
+        "relevance",
+        "newest"
+      ],
+      "enumTitles": [
+        "Relevance",
+        "Newest"
+      ]
+    },
+    "results_wanted": {
+      "title": "Maximum Number of Products",
+      "type": "integer",
+      "description": "Maximum number of products to save.",
+      "minimum": 1,
+      "default": 20,
+      "prefill": 20,
+      "editor": "number"
+    },
+    "max_pages": {
+      "title": "Maximum Number of Pages",
+      "type": "integer",
+      "description": "Safety cap for pagination depth.",
+      "minimum": 1,
+      "default": 10,
+      "prefill": 10,
+      "editor": "number"
+    },
+    "include_sponsored": {
+      "title": "Include Sponsored Products",
+      "type": "boolean",
+      "description": "Include sponsored products in the response.",
+      "editor": "checkbox",
+      "default": true
+    },
+    "proxyConfiguration": {
+      "title": "Proxy Configuration",
+      "type": "object",
+      "description": "Proxy settings for reliable data collection.",
+      "editor": "proxy",
+      "default": {
+        "useApifyProxy": false
+      }
+    }
+  },
+  "required": [],
+  "additionalProperties": false
+}
