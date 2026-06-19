@@ -1,6 +1,6 @@
 # Target Product Scraper
 
-Collect product listings from Target search with rich product details ready for analysis, monitoring, and automation. This actor helps you build structured datasets for pricing intelligence, assortment tracking, and catalog research.
+Collect paginated product listings from Target search with resilient request handling and rich product details ready for analysis, monitoring, and automation. This actor helps you build structured datasets for pricing intelligence, assortment tracking, and catalog research.
 
 ---
 
@@ -8,8 +8,9 @@ Collect product listings from Target search with rich product details ready for 
 
 - **Search-focused extraction** - Collect products by keyword or search URL.
 - **Rich product fields** - Capture title, pricing, ratings, brand, images, and product links.
-- **Pagination support** - Gather results across multiple pages with safety limits.
+- **Reliable pagination** - Gather results across multiple pages with offset-based pagination that self-recovers when Target changes request behavior.
 - **Marketplace visibility** - Identify marketplace items directly in output.
+- **Runtime diagnosis** - When Target changes headers or endpoint behavior, the actor re-reads the documented API flow and probes live endpoints before falling back.
 - **Clean dataset output** - Records are saved without empty null fields.
 
 ---
@@ -42,7 +43,7 @@ Review product rating averages and rating counts for quality and demand insights
 | `include_sponsored` | Boolean | No | `true` | Include sponsored products in results. |
 | `proxyConfiguration` | Object | No | Disabled | Proxy settings for reliability. |
 
-Store context and visitor identifier are handled internally by the actor. If your `startUrl` already includes those query parameters, they are respected.
+Store context and visitor identifier are handled internally by the actor. If your `startUrl` already includes those query parameters, they are respected and refreshed when needed.
 
 ---
 
@@ -61,15 +62,30 @@ Each dataset item may include the following fields:
 | `brand` | String | Product brand. |
 | `formatted_current_price` | String | Current displayed price. |
 | `formatted_comparison_price` | String | Comparison price if available. |
+| `current_retail` | Number | Current numeric retail price when available. |
+| `reg_retail` | Number | Regular retail price when available. |
 | `rating_average` | Number | Average star rating. |
 | `rating_count` | Integer | Number of ratings. |
+| `shipping_availability` | String | Shipping stock status. |
+| `scheduled_delivery_availability` | String | Scheduled delivery stock status. |
+| `free_shipping_enabled` | Boolean | Free shipping flag. |
 | `is_marketplace` | Boolean | Marketplace flag. |
 | `item_type` | String | Product classification label. |
 | `department_id` | Integer | Target department ID. |
+| `category_id` | String | Category identifier returned by Target. |
+| `parent_category_id` | String | Parent category identifier. |
+| `review_overall_sentiment` | String | Review summary sentiment when available. |
+| `promotions` | Array | Promotion identifiers or messages present on the item. |
+| `ornaments` | Array | Merchandising callouts shown on the listing page. |
 | `buy_url` | String | Product page URL. |
 | `primary_image_url` | String | Main product image. |
+| `alternate_image_urls` | Array | Additional product image URLs. |
+| `swatch_image_url` | String | Swatch or color preview image. |
 | `response_id` | String | Result response identifier. |
 | `sort_by` | String | Sort mode used in request. |
+| `current_page` | Integer | Listing page number from Target metadata. |
+| `total_pages` | Integer | Total number of pages reported by Target. |
+| `result_offset` | Integer | Offset used for the current page. |
 | `scraped_at` | String | Record timestamp in ISO format. |
 
 ---
@@ -121,15 +137,25 @@ Each dataset item may include the following fields:
 	"brand": "INSPIRE CHIC",
 	"formatted_current_price": "$28.99 - $31.99",
 	"formatted_comparison_price": "$38.69 - $42.69",
+	"current_retail": 28.99,
 	"rating_average": 3.62,
 	"rating_count": 18,
+	"shipping_availability": "IN_STOCK",
+	"scheduled_delivery_availability": "OUT_OF_STOCK",
 	"is_marketplace": true,
 	"item_type": "Shirts",
 	"department_id": 287,
+	"category_id": "9qjry",
 	"buy_url": "https://www.target.com/p/allegra-k-women-s-ruffle-v-neck-puff-sleeve-summer-casual-chiffon-peasant-top-black-x-large/-/A-89513491",
 	"primary_image_url": "https://target.scene7.com/is/image/Target/GUEST_98f735e4-29c7-4875-bafc-fbded857596a",
+	"alternate_image_urls": [
+		"https://target.scene7.com/is/image/Target/GUEST_alt_example"
+	],
 	"response_id": "search-31762b4a-701d-424d-b792-94adc23d8614",
 	"sort_by": "relevance",
+	"current_page": 1,
+	"total_pages": 50,
+	"result_offset": 0,
 	"scraped_at": "2026-04-07T08:00:00.000Z"
 }
 ```
