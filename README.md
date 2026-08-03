@@ -1,231 +1,243 @@
-# Target Product Scraper
+## What does Target Product Scraper do?
 
-Collect paginated product listings from Target search with resilient request handling and rich product details ready for analysis, monitoring, and automation. This actor helps you build structured datasets for pricing intelligence, assortment tracking, and catalog research.
+Target Product Scraper collects structured product listings from Target.com search results. Enter a Target search keyword or a public Target listing URL, choose how many products to collect, and receive records with product names, brands, prices, ratings, availability, images, category identifiers, marketplace status, and product URLs.
 
----
+The dataset is useful for price monitoring, competitor assortment tracking, product research, merchandising analysis, and ecommerce data pipelines. Results can be exported from Apify in JSON, CSV, Excel, XML, and other supported formats, or connected to an API, webhook, Google Sheets, Make, or Zapier workflow.
 
-## Features
+## Why use Target Product Scraper?
 
-- **Search-focused extraction** - Collect products by keyword or search URL.
-- **Rich product fields** - Capture title, pricing, ratings, brand, images, and product links.
-- **Reliable pagination** - Gather results across multiple pages with offset-based pagination that self-recovers when Target changes request behavior.
-- **Marketplace visibility** - Identify marketplace items directly in output.
-- **Runtime diagnosis** - When Target changes headers or endpoint behavior, the actor re-reads the documented API flow and probes live endpoints before falling back.
-- **Clean dataset output** - Records are saved without empty null fields.
+- **Target product research** - Build a searchable dataset for categories, brands, seasonal products, and shopping trends.
+- **Price monitoring** - Compare current displayed prices, regular prices, comparison prices, and rating signals across repeated runs.
+- **Assortment analysis** - Track which products and brands appear for important search terms and how product coverage changes over time.
+- **Availability checks** - Capture shipping and scheduled delivery availability where Target publishes those signals.
+- **Marketplace analysis** - Identify products sold through Target’s marketplace using the `is_marketplace` field.
+- **Automation-ready data** - Run on demand or on a schedule, download the dataset, or pass results to downstream systems through Apify integrations.
 
----
+## What data can you extract from Target?
 
-## Use Cases
+Each dataset item represents one product listing. Empty values are omitted when Target does not publish a field for a product.
 
-### Price Monitoring
-Track price changes and comparisons over time for selected categories or seasonal keywords.
+| Field                             | Description                                                 |
+| --------------------------------- | ----------------------------------------------------------- |
+| `title`                           | Product title shown in the Target listing.                  |
+| `brand`                           | Product brand name.                                         |
+| `tcin`                            | Target product identifier.                                  |
+| `parent_tcin`                     | Parent identifier for a product variation group.            |
+| `formatted_current_price`         | Current displayed price or price range.                     |
+| `formatted_comparison_price`      | Comparison or regular price displayed by Target.            |
+| `current_retail`                  | Numeric current retail price when available.                |
+| `reg_retail`                      | Numeric regular retail price when available.                |
+| `rating_average`                  | Average customer rating.                                    |
+| `rating_count`                    | Number of ratings.                                          |
+| `review_overall_sentiment`        | Review summary sentiment when available.                    |
+| `shipping_availability`           | Shipping availability status.                               |
+| `scheduled_delivery_availability` | Scheduled delivery availability status.                     |
+| `is_marketplace`                  | Indicates whether the item is a marketplace product.        |
+| `item_type`                       | Target product classification.                              |
+| `vendor_name`                     | Vendor or seller name when available.                       |
+| `department_id`                   | Target department identifier.                               |
+| `category_id`                     | Target category identifier.                                 |
+| `parent_category_id`              | Parent category identifier.                                 |
+| `buy_url`                         | Direct Target product page URL.                             |
+| `primary_image_url`               | Main product image URL.                                     |
+| `alternate_image_urls`            | Additional product image URLs.                              |
+| `promotions`                      | Promotion identifiers or messages associated with the item. |
+| `search_keyword`                  | Keyword used for the run.                                   |
+| `position`                        | Product position in the collected result flow.              |
+| `page`                            | Listing page where the item was collected.                  |
+| `current_page`                    | Page number reported by Target metadata.                    |
+| `total_pages`                     | Total pages reported by Target metadata.                    |
+| `result_offset`                   | Result offset used for the page.                            |
+| `sort_by`                         | Sort option used for the run.                               |
+| `scraped_at`                      | ISO timestamp for the collected record.                     |
 
-### Competitor Assortment Tracking
-Analyze which products, brands, and item types are appearing for key searches.
+## How to scrape Target product data
 
-### Product Research
-Build focused datasets for market research, trend reporting, or merchandising analysis.
+1. Open Target Product Scraper on Apify.
+2. Enter a search keyword, or provide a public Target listing URL in `startUrl`.
+3. Set the result limit and pagination cap.
+4. Choose relevance or newest sorting and decide whether sponsored products should be included.
+5. Start the run and review the dataset preview.
+6. Download the results or connect the dataset to your next workflow.
 
-### Ratings Intelligence
-Review product rating averages and rating counts for quality and demand insights.
-
----
+The simplest run uses `keyword`. A valid `startUrl` can provide the search context instead. If both are supplied, an explicit `keyword` takes precedence when a keyword can be read from the URL.
 
 ## Input Parameters
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `startUrl` | String | No | Example prefill | Target search URL. If set, keyword and related values are inferred from it. |
-| `keyword` | String | No | `"womens tops"` | Search keyword used for product collection. |
-| `sort_by` | String | No | `"relevance"` | Sort mode (`relevance`, `newest`). |
-| `results_wanted` | Integer | No | `20` | Maximum number of products to collect. |
-| `max_pages` | Integer | No | `10` | Maximum pages to process. |
-| `include_sponsored` | Boolean | No | `true` | Include sponsored products in results. |
-| `proxyConfiguration` | Object | No | Disabled | Proxy settings for reliability. |
+| Parameter            | Type    | Required | Default                    | Description                                                                       |
+| -------------------- | ------- | -------- | -------------------------- | --------------------------------------------------------------------------------- |
+| `startUrl`           | String  | No*      | Target search URL prefill  | Public Target listing URL. Search context is inferred from the URL when possible. |
+| `keyword`            | String  | No*      | `womens tops`              | Search keyword used to collect products. Provide this or a valid `startUrl`.      |
+| `sort_by`            | String  | No       | `relevance`                | Result order. Supported values are `relevance` and `newest`.                      |
+| `results_wanted`     | Integer | No       | `20`                       | Maximum number of products to save. Minimum value is `1`.                         |
+| `max_pages`          | Integer | No       | `10`                       | Maximum number of listing pages to process. Minimum value is `1`.                 |
+| `include_sponsored`  | Boolean | No       | `true`                     | Include sponsored products in the dataset.                                        |
+| `proxyConfiguration` | Object  | No       | `{"useApifyProxy": false}` | Optional Apify Proxy configuration for the run.                                   |
 
-Store context and visitor identifier are handled internally by the actor. If your `startUrl` already includes those query parameters, they are respected and refreshed when needed.
-
----
-
-## Output Data
-
-Each dataset item may include the following fields:
-
-| Field | Type | Description |
-|---|---|---|
-| `position` | Integer | Product position in result flow. |
-| `page` | Integer | Page number where the product was collected. |
-| `search_keyword` | String | Keyword used in the run. |
-| `tcin` | String | Target product identifier. |
-| `parent_tcin` | String | Parent identifier for variation groups. |
-| `title` | String | Product title. |
-| `brand` | String | Product brand. |
-| `formatted_current_price` | String | Current displayed price. |
-| `formatted_comparison_price` | String | Comparison price if available. |
-| `current_retail` | Number | Current numeric retail price when available. |
-| `reg_retail` | Number | Regular retail price when available. |
-| `rating_average` | Number | Average star rating. |
-| `rating_count` | Integer | Number of ratings. |
-| `shipping_availability` | String | Shipping stock status. |
-| `scheduled_delivery_availability` | String | Scheduled delivery stock status. |
-| `free_shipping_enabled` | Boolean | Free shipping flag. |
-| `is_marketplace` | Boolean | Marketplace flag. |
-| `item_type` | String | Product classification label. |
-| `department_id` | Integer | Target department ID. |
-| `category_id` | String | Category identifier returned by Target. |
-| `parent_category_id` | String | Parent category identifier. |
-| `review_overall_sentiment` | String | Review summary sentiment when available. |
-| `promotions` | Array | Promotion identifiers or messages present on the item. |
-| `ornaments` | Array | Merchandising callouts shown on the listing page. |
-| `buy_url` | String | Product page URL. |
-| `primary_image_url` | String | Main product image. |
-| `alternate_image_urls` | Array | Additional product image URLs. |
-| `swatch_image_url` | String | Swatch or color preview image. |
-| `response_id` | String | Result response identifier. |
-| `sort_by` | String | Sort mode used in request. |
-| `current_page` | Integer | Listing page number from Target metadata. |
-| `total_pages` | Integer | Total number of pages reported by Target. |
-| `result_offset` | Integer | Offset used for the current page. |
-| `scraped_at` | String | Record timestamp in ISO format. |
-
----
+`*` At least one usable search input is needed. If neither `keyword` nor a valid Target listing URL is provided, the run cannot start.
 
 ## Usage Examples
 
-### Basic Search
+### Basic keyword search
+
+Collect up to 20 products for a Target search term.
 
 ```json
 {
-	"keyword": "womens tops",
-	"results_wanted": 20
+    "keyword": "womens tops",
+    "results_wanted": 20
 }
 ```
 
-### Start URL Driven Collection
+### Collection from a Target search URL
+
+Use a complete Target search URL when the URL already contains the category or search context you need.
 
 ```json
 {
-	"startUrl": "https://www.target.com/s?searchTerm=womens+tops&category=0%7CAll%7Cmatchallpartial%7Call+categories&searchTermRaw=womw",
-	"results_wanted": 50,
-	"max_pages": 5
+    "startUrl": "https://www.target.com/s?searchTerm=womens+tops&category=0%7CAll%7Cmatchallpartial%7Call+categories&searchTermRaw=womw",
+    "results_wanted": 50,
+    "max_pages": 5
 }
 ```
 
-### Sorted Collection with Store Context
+### Newest products without sponsored listings
+
+Collect a larger result set sorted by newest products and exclude sponsored items.
 
 ```json
 {
-	"keyword": "running shoes",
-	"sort_by": "newest",
-	"results_wanted": 100,
-	"max_pages": 10
+    "keyword": "running shoes",
+    "sort_by": "newest",
+    "results_wanted": 100,
+    "max_pages": 10,
+    "include_sponsored": false
 }
 ```
 
----
+## Output Data
+
+Each dataset item is one product record. Unavailable fields may be omitted.
+
+| Field                             | Type    | Description                           |
+| --------------------------------- | ------- | ------------------------------------- |
+| `title`                           | String  | Product name.                         |
+| `tcin`                            | String  | Target product identifier.            |
+| `brand`                           | String  | Brand name.                           |
+| `formatted_current_price`         | String  | Displayed price or price range.       |
+| `current_retail`                  | Number  | Numeric current price when available. |
+| `rating_average`                  | Number  | Average rating.                       |
+| `rating_count`                    | Integer | Number of ratings.                    |
+| `shipping_availability`           | String  | Shipping status.                      |
+| `scheduled_delivery_availability` | String  | Scheduled delivery status.            |
+| `is_marketplace`                  | Boolean | Marketplace product indicator.        |
+| `item_type`                       | String  | Product classification.               |
+| `buy_url`                         | String  | Direct product page URL.              |
+| `primary_image_url`               | String  | Main image URL.                       |
+| `alternate_image_urls`            | Array   | Additional image URLs.                |
+| `promotions`                      | Array   | Product promotions when available.    |
+| `search_keyword`                  | String  | Search term used in the run.          |
+| `position`                        | Integer | Product position in the result flow.  |
+| `page`                            | Integer | Collected listing page.               |
+| `sort_by`                         | String  | Sort order used.                      |
+| `scraped_at`                      | String  | ISO collection timestamp.             |
 
 ## Sample Output
 
+This is an example of one product record returned by the dataset.
+
 ```json
 {
-	"position": 1,
-	"page": 1,
-	"search_keyword": "womens tops",
-	"tcin": "89513491",
-	"parent_tcin": "87193107",
-	"title": "INSPIRE CHIC Women's Ruffle V Neck Puff Sleeve Summer Casual Chiffon Peasant Top X-Large Black",
-	"brand": "INSPIRE CHIC",
-	"formatted_current_price": "$28.99 - $31.99",
-	"formatted_comparison_price": "$38.69 - $42.69",
-	"current_retail": 28.99,
-	"rating_average": 3.62,
-	"rating_count": 18,
-	"shipping_availability": "IN_STOCK",
-	"scheduled_delivery_availability": "OUT_OF_STOCK",
-	"is_marketplace": true,
-	"item_type": "Shirts",
-	"department_id": 287,
-	"category_id": "9qjry",
-	"buy_url": "https://www.target.com/p/allegra-k-women-s-ruffle-v-neck-puff-sleeve-summer-casual-chiffon-peasant-top-black-x-large/-/A-89513491",
-	"primary_image_url": "https://target.scene7.com/is/image/Target/GUEST_98f735e4-29c7-4875-bafc-fbded857596a",
-	"alternate_image_urls": [
-		"https://target.scene7.com/is/image/Target/GUEST_alt_example"
-	],
-	"response_id": "search-31762b4a-701d-424d-b792-94adc23d8614",
-	"sort_by": "relevance",
-	"current_page": 1,
-	"total_pages": 50,
-	"result_offset": 0,
-	"scraped_at": "2026-04-07T08:00:00.000Z"
+    "position": 1,
+    "page": 1,
+    "search_keyword": "running shoes",
+    "tcin": "89513491",
+    "parent_tcin": "87193107",
+    "title": "Women's Running Shoe",
+    "brand": "Example Brand",
+    "formatted_current_price": "$28.99",
+    "current_retail": 28.99,
+    "rating_average": 4.4,
+    "rating_count": 128,
+    "shipping_availability": "IN_STOCK",
+    "scheduled_delivery_availability": "IN_STOCK",
+    "is_marketplace": false,
+    "item_type": "Athletic Shoes",
+    "department_id": 287,
+    "category_id": "shoes",
+    "buy_url": "https://www.target.com/p/example-running-shoe/-/A-89513491",
+    "primary_image_url": "https://target.scene7.com/is/image/Target/example",
+    "alternate_image_urls": ["https://target.scene7.com/is/image/Target/example-alt"],
+    "sort_by": "relevance",
+    "current_page": 1,
+    "total_pages": 10,
+    "result_offset": 0,
+    "scraped_at": "2026-08-03T10:30:00.000Z"
 }
 ```
 
----
+## Tips for Best Results
 
-## Tips For Best Results
+- **Use specific keywords** - Terms such as `women's running shoes`, `4K TVs`, or `organic coffee` produce more focused datasets than broad terms.
+- **Start with a small limit** - Test with 20 results before increasing `results_wanted` for a large collection.
+- **Use the page cap as a guardrail** - Increase `max_pages` when you need deeper coverage, while keeping the run size predictable.
+- **Review the dataset preview** - Confirm price, availability, category, and URL fields before scheduling repeat runs.
+- **Expect source variation** - Marketplace products and regular Target products may expose different fields. Missing values usually mean the source listing did not publish that information.
+- **Schedule repeat runs for monitoring** - Compare datasets over time to identify price, rating, assortment, or availability changes.
 
-### Use Specific Keywords
-Targeted search terms improve relevance and make downstream analysis easier.
+## Integrations and Export Formats
 
-### Start Small, Then Scale
-Begin with `results_wanted` set to `20` for quick validation, then increase gradually.
-
-### Configure Proxy For Reliability
-Residential proxy settings improve consistency for larger data collection runs.
-
-### Tune Pagination Safely
-Use `max_pages` as a guardrail to control runtime and data volume.
-
----
-
-## Integrations
-
-- **Google Sheets** - Export product datasets for quick analysis.
-- **Airtable** - Build searchable product tracking tables.
-- **Make** - Trigger automated workflows after each run.
-- **Zapier** - Send product events to business tools.
-- **Webhooks** - Deliver fresh data to custom systems.
-
-### Export Formats
-
-- **JSON** - Programmatic workflows and APIs
-- **CSV** - Spreadsheet and BI analysis
-- **Excel** - Business reporting
-- **XML** - System integrations
-
----
+- **Google Sheets** - Review product prices, brands, and availability in a shared spreadsheet.
+- **Airtable** - Build a searchable product catalog for merchandising or research teams.
+- **Webhooks** - Notify another system when a run finishes.
+- **Make or Zapier** - Send product records to no-code workflows.
+- **Apify API** - Read dataset items from an application or data pipeline.
+- **JSON, CSV, Excel, and XML** - Export results for analysis, reporting, or system imports.
 
 ## Frequently Asked Questions
 
-### How many products can I collect?
-You can collect as many as available for your search, limited by your `results_wanted` and `max_pages` settings.
+### Can I scrape Target products by keyword?
+
+Yes. Provide a search term in `keyword`, set a result limit, and run the Actor.
 
 ### Can I use a full Target search URL?
-Yes. Provide `startUrl` and the actor will use it as the source for search settings.
 
-### Why do some items have fewer fields?
-Some products may not publish every attribute. The actor saves only available values and excludes nulls.
+Yes. Add a public Target listing URL to `startUrl`. The Actor reads the search context from supported listing URLs.
 
-### Does this support pagination automatically?
-Yes. The actor moves through result pages until limits are reached.
+### Does the Actor collect prices and availability?
 
-### Is sponsored content included?
-Yes by default. You can disable it using `include_sponsored`.
+Yes. Output can include displayed and numeric prices, comparison prices, shipping status, scheduled delivery status, sold-out indicators, and marketplace status when Target provides them.
 
----
+### Does it include sponsored products?
+
+Yes, sponsored products are included by default. Set `include_sponsored` to `false` to exclude them.
+
+### How many products can I collect?
+
+The Actor stops when it reaches `results_wanted`, reaches `max_pages`, or no additional products are available. The practical result count also depends on the Target search results.
+
+### Can I run it on a schedule?
+
+Yes. Create an Apify schedule to repeat the run hourly, daily, weekly, or at another interval supported by your workflow.
+
+### Why is a field missing from one product?
+
+Target does not publish every attribute for every listing. The dataset omits unavailable values, so compare several records before treating a field as universally present.
+
+### Is it legal to collect Target data?
+
+You are responsible for complying with Target’s terms, applicable laws, privacy requirements, and any restrictions associated with the data you collect. Use the Actor for legitimate research, monitoring, and business workflows.
+
+## Related Actors
+
+- [Target Reviews Scraper](https://apify.com/shahidirfan/target-reviews-scraper) - Collect customer reviews, ratings, and feedback from Target product pages.
+- [Shopify Product Scraper](https://apify.com/shahidirfan/shopify-product-scraper) - Collect normalized product and variant data from Shopify-powered stores.
+- [Trendyol Product Scraper](https://apify.com/shahidirfan/trendyol-product-scraper) - Collect product names, prices, ratings, reviews, images, and URLs from Trendyol search results.
 
 ## Support
 
-For issues or feature requests, use the Apify Console issue and support channels.
-
-### Resources
-
-- [Apify Documentation](https://docs.apify.com/)
-- [Apify API Reference](https://docs.apify.com/api/v2)
-- [Apify Scheduling](https://docs.apify.com/platform/schedules)
-
----
+For issues, feature requests, or target-site changes, use the Issues tab on the Actor page in Apify Console. Include the input used, run ID, and a short description of the unexpected result when requesting help.
 
 ## Legal Notice
 
-This actor is intended for legitimate data collection and analysis. Users are responsible for complying with website terms and applicable laws in their jurisdiction.
+This Actor is intended for legitimate collection and analysis of publicly available Target.com product information. Users are responsible for complying with Target’s website terms, applicable laws, privacy obligations, and any requirements governing the use or redistribution of collected data.
