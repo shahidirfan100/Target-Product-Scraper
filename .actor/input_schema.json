@@ -7,16 +7,16 @@
     "startUrl": {
       "title": "Start URL",
       "type": "string",
-      "description": "Optional Target listing URL. If provided, keyword and page context are inferred from this URL unless explicitly overridden.",
+      "description": "Target listing URL. This URL is used when Keyword is empty. If both are provided, Keyword mode takes precedence and this URL is ignored. Defaults to a wireless headphones search when no search input is provided.",
       "editor": "textfield",
-      "prefill": "https://www.target.com/s?searchTerm=womens+tops&category=0%7CAll%7Cmatchallpartial%7Call+categories&searchTermRaw=womw"
+      "default": "https://www.target.com/s?searchTerm=wireless%20headphones",
+      "prefill": "https://www.target.com/s?searchTerm=wireless%20headphones"
     },
     "keyword": {
       "title": "Keyword",
       "type": "string",
       "description": "Search keyword used to collect products.",
-      "editor": "textfield",
-      "prefill": "womens tops"
+      "editor": "textfield"
     },
     "sort_by": {
       "title": "Sort By",
@@ -24,7 +24,6 @@
       "description": "Sort mode for product results.",
       "editor": "select",
       "default": "relevance",
-      "prefill": "relevance",
       "enum": [
         "relevance",
         "newest"
@@ -40,7 +39,6 @@
       "description": "Maximum number of products to save.",
       "minimum": 1,
       "default": 20,
-      "prefill": 20,
       "editor": "number"
     },
     "max_pages": {
@@ -49,7 +47,6 @@
       "description": "Safety cap for pagination depth.",
       "minimum": 1,
       "default": 10,
-      "prefill": 10,
       "editor": "number"
     },
     "include_sponsored": {

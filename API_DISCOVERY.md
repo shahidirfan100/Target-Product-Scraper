@@ -51,6 +51,21 @@
   - `current_page` increments correctly.
   - `total_pages` and `total_results` are present.
   - `count` remains `24`, matching the intended pagination step.
+- On September 27, 2026, the actor's current `got-scraping` request for `wireless headphones` returned HTTP 200 with 29 products and valid pagination metadata. The live Target browser returned the same product marker with 30 products for its own store context.
+- On September 27, 2026, `womens tops` returned HTTP 200 with a valid `redirect_url` to Target's Women's Tops category and no direct product array. This is a search redirect, not a missing-header or HTTP failure; the actor should stop that search cleanly instead of treating status 200 as the error or probing RedSky.
+
+## Observed Browser Request Headers
+
+The successful live CDUI browser request exposed these header types:
+
+- `Accept: application/json`
+- `Referer`
+- `User-Agent`
+- `Sec-CH-UA`
+- `Sec-CH-UA-Mobile`
+- `Sec-CH-UA-Platform`
+
+The actor also sends `Accept-Language`, which was absent from the captured browser request. No `Origin`, `Sec-Fetch-*`, or `Cookie` header appeared in the capture. The actor's current header profile returned products, so no missing header family is indicated. Keep the user-agent and `Sec-CH-UA` browser versions consistent.
 
 ## Auto-Healing Guidance
 

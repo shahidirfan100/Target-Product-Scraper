@@ -60,21 +60,21 @@ Each dataset item represents one product listing. Empty values are omitted when 
 5. Start the run and review the dataset preview.
 6. Download the results or connect the dataset to your next workflow.
 
-The simplest run uses `keyword`. A valid `startUrl` can provide the search context instead. If both are supplied, an explicit `keyword` takes precedence when a keyword can be read from the URL.
+Use `keyword` or `startUrl` as one search mode. If both are present, `keyword` takes precedence and the URL is ignored. When neither is provided, the Actor uses its configured wireless-headphones search URL. The `startUrl` value is both the single UI prefill and the schema default; the runtime also uses the same documented default if the run input is empty. Omitted result controls use their own runtime defaults, while explicit values are preserved.
 
 ## Input Parameters
 
-| Parameter            | Type    | Required | Default                    | Description                                                                       |
+| Parameter            | Type    | Required | Default / UI prefill       | Description                                                                       |
 | -------------------- | ------- | -------- | -------------------------- | --------------------------------------------------------------------------------- |
-| `startUrl`           | String  | No*      | Target search URL prefill  | Public Target listing URL. Search context is inferred from the URL when possible. |
-| `keyword`            | String  | No*      | `womens tops`              | Search keyword used to collect products. Provide this or a valid `startUrl`.      |
+| `startUrl`           | String  | No*      | `https://www.target.com/s?searchTerm=wireless%20headphones` (default and UI prefill) | Public Target listing URL, used when `keyword` is empty. |
+| `keyword`            | String  | No*      | None                       | Search keyword used to collect products. Provide this or a valid `startUrl`.      |
 | `sort_by`            | String  | No       | `relevance`                | Result order. Supported values are `relevance` and `newest`.                      |
 | `results_wanted`     | Integer | No       | `20`                       | Maximum number of products to save. Minimum value is `1`.                         |
 | `max_pages`          | Integer | No       | `10`                       | Maximum number of listing pages to process. Minimum value is `1`.                 |
 | `include_sponsored`  | Boolean | No       | `true`                     | Include sponsored products in the dataset.                                        |
 | `proxyConfiguration` | Object  | No       | `{"useApifyProxy": false}` | Optional Apify Proxy configuration for the run.                                   |
 
-`*` At least one usable search input is needed. If neither `keyword` nor a valid Target listing URL is provided, the run cannot start.
+`*` A usable search value is always available: the Actor uses a supplied `keyword`, then a supplied `startUrl`, and falls back to its configured default URL when neither is present. When both search fields are present, only `keyword` is used.
 
 ## Usage Examples
 

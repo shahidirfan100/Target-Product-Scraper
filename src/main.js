@@ -11,6 +11,7 @@ const CDUI_API_URL = 'https://cdui-orchestrations.target.com/cdui_orchestrations
 const SAPPHIRE_RUNTIME_URL = 'https://sapphire-api.target.com/sapphire/runtime/api/v1/raw/www.target.com/s';
 const LEGACY_REDSKY_URL = 'https://redsky.target.com/redsky_aggregations/v1/web/plp_search_v2';
 const PAGE_SIZE_LIMIT = 24;
+const DEFAULT_SEARCH_URL = 'https://www.target.com/s?searchTerm=wireless%20headphones';
 const DEFAULT_STORE_ID = '3991';
 const DEFAULT_SCHEDULED_STORE_ID = '810';
 const DEFAULT_ZIP = '61010';
@@ -258,6 +259,10 @@ const buildBrowserHeaders = (referer) => {
 
 const createRequestContext = ({ startUrl, keyword, extracted }) => {
     const pagePath = extracted.pagePath || buildPagePath(keyword, startUrl);
+    const startUrlMatchesKeyword = !extracted.keyword || extracted.keyword.toLowerCase() === keyword.toLowerCase();
+    const referer = startUrl && (extracted.pagePath || startUrlMatchesKeyword)
+        ? startUrl
+        : `https://www.target.com/s?searchTerm=${encodeURIComponent(keyword)}`;
 
     return {
         keyword,
@@ -270,7 +275,7 @@ const createRequestContext = ({ startUrl, keyword, extracted }) => {
         country: DEFAULT_COUNTRY,
         latitude: String(extracted.latitude || DEFAULT_LATITUDE),
         longitude: String(extracted.longitude || DEFAULT_LONGITUDE),
-        referer: startUrl || `https://www.target.com/s?searchTerm=${encodeURIComponent(keyword)}`,
+        referer,
     };
 };
 
@@ -481,11 +486,13 @@ const selectWorkingStrategy = async ({
 
 await Actor.init();
 
+let exitCode = 0;
+
 try {
     const input = (await Actor.getInput()) || {};
     const {
-        startUrl,
-        keyword: keywordInput,
+        startUrl: startUrlInput,
+        keyword: keywordValue,
         results_wanted: resultsWantedInput = 20,
         max_pages: maxPagesInput = 10,
         sort_by: sortByInput = 'relevance',
@@ -493,11 +500,21 @@ try {
         proxyConfiguration,
     } = input;
 
+    const providedStartUrl = trimToUndefined(startUrlInput);
+    const keywordInput = trimToUndefined(keywordValue);
+
+    // Keyword mode is exclusive. Ignore any URL that arrived beside it, including
+    // a platform-resolved URL default or a Console value left from another mode.
+    const startUrl = keywordInput ? undefined : providedStartUrl || DEFAULT_SEARCH_URL;
     const extracted = parseStartUrl(startUrl);
-    const keyword = trimToUndefined(keywordInput) || extracted.keyword;
+    const keyword = keywordInput || extracted.keyword;
 
     if (!keyword) {
         throw new Error('Missing required input: keyword (or provide a valid startUrl with searchTerm).');
+    }
+
+    if (!keywordInput && !providedStartUrl) {
+        log.info('No search input was provided; using the configured default Target search URL.');
     }
 
     const resultsWanted = toPositiveInt(resultsWantedInput, 20);
@@ -541,9 +558,19 @@ try {
                 });
 
                 ({ products, metadata } = parseCduiSearchResponse(result.payload));
-                if (result.statusCode >= 400 || products.length === 0) {
+                if (result.statusCode >= 400) {
                     const errorMessage = Array.isArray(result.payload?.errors) ? result.payload.errors[0]?.message : undefined;
-                    throw new Error(errorMessage || `Primary listing endpoint returned status ${result.statusCode}`);
+                    throw new Error(errorMessage || `CDUI listing endpoint returned HTTP ${result.statusCode}`);
+                }
+
+                if (products.length === 0) {
+                    const redirectUrl = trimToUndefined(metadata?.redirect_url);
+                    if (redirectUrl) {
+                        log.warning(`Target redirected this search to ${redirectUrl} and returned no direct product results.`);
+                        break;
+                    }
+
+                    throw new Error('CDUI returned no products and no category redirect metadata.');
                 }
             } else {
                 const result = await fetchLegacyRedskyPage({
@@ -619,6 +646,10 @@ try {
     }
 
     log.info(`Extraction complete. Saved ${saved} products.`);
+} catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.error(`Actor run failed: ${message}`);
+    exitCode = 1;
 } finally {
-    await Actor.exit();
+    await Actor.exit({ exitCode });
 }
