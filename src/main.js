@@ -1,16 +1,21 @@
 import { randomBytes } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 
 import { Actor, log } from 'apify';
 import { Dataset } from 'crawlee';
-import { gotScraping } from 'got-scraping';
+import { Impit } from 'impit';
 
-const API_DISCOVERY_PATH = new URL('../API_DISCOVERY.md', import.meta.url);
 const TARGET_API_KEY = '9f36aeafbe60771e321a7cc95a78140772ab3e96';
 const CDUI_API_URL = 'https://cdui-orchestrations.target.com/cdui_orchestrations/v1/pages/slp';
-const SAPPHIRE_RUNTIME_URL = 'https://sapphire-api.target.com/sapphire/runtime/api/v1/raw/www.target.com/s';
-const LEGACY_REDSKY_URL = 'https://redsky.target.com/redsky_aggregations/v1/web/plp_search_v2';
+
+const LISTING_BROWSER = 'chrome151';
+
 const PAGE_SIZE_LIMIT = 24;
+
+const REQUEST_TIMEOUT_MS = 45000;
+const MAX_FETCH_ATTEMPTS = 6;
+const RETRY_BASE_DELAY_MS = 800;
+const IMPIT_CLIENT_CACHE_LIMIT = 64;
+
 const DEFAULT_SEARCH_URL = 'https://www.target.com/s?searchTerm=wireless%20headphones';
 const DEFAULT_STORE_ID = '3991';
 const DEFAULT_SCHEDULED_STORE_ID = '810';
@@ -20,22 +25,9 @@ const DEFAULT_COUNTRY = 'PK';
 const DEFAULT_LATITUDE = '30.170';
 const DEFAULT_LONGITUDE = '72.680';
 
-const BROWSER_PROFILES = [
-    {
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
-        secChUa: '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
-        secChUaMobile: '?0',
-        secChUaPlatform: '"Windows"',
-    },
-    {
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36',
-        secChUa: '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
-        secChUaMobile: '?0',
-        secChUaPlatform: '"macOS"',
-    },
-];
-
-const randomProfile = () => BROWSER_PROFILES[Math.floor(Math.random() * BROWSER_PROFILES.length)];
+const sleep = (ms) => new Promise((resolve) => {
+    setTimeout(resolve, ms);
+});
 
 const toPositiveInt = (value, fallback) => {
     const n = Number(value);
@@ -156,6 +148,23 @@ const cleanValue = (value) => {
     return value;
 };
 
+const HTML_ENTITIES = {
+    '&amp;': '&',
+    '&#38;': '&',
+    '&quot;': '"',
+    '&#34;': '"',
+    '&#39;': "'",
+    '&apos;': "'",
+    '&lt;': '<',
+    '&gt;': '>',
+    '&nbsp;': ' ',
+};
+
+const decodeHtml = (value) => {
+    if (typeof value !== 'string' || !value.includes('&')) return value;
+    return value.replace(/&#?[a-zA-Z0-9]+;/g, (match) => HTML_ENTITIES[match] ?? match);
+};
+
 const getAlternateImageUrls = (imageInfo = {}) => {
     const alternateImages = imageInfo.alternate_images || imageInfo.alternate_image_urls || [];
     return alternateImages
@@ -207,16 +216,16 @@ const mapProduct = (product, keyword, metadata, pageNo, position) => {
         tcin: product?.tcin,
         original_tcin: product?.original_tcin,
         parent_tcin: parent?.tcin,
-        title: description?.title,
+        title: decodeHtml(description?.title),
         buy_url: enrichment?.buy_url,
         primary_image_url: imageInfo?.primary_image?.url || imageInfo?.primary_image_url,
         alternate_image_urls: getAlternateImageUrls(imageInfo),
         swatch_image_url: imageInfo?.swatch_image?.url,
-        brand: brand?.name,
+        brand: decodeHtml(brand?.name),
         brand_url: brand?.canonical_url,
         relationship_type: item?.relationship_type,
         item_type: item?.product_classification?.item_type?.name,
-        vendor_name: vendor?.vendor_name,
+        vendor_name: decodeHtml(vendor?.vendor_name),
         department_id: item?.merchandise_classification?.department_id,
         class_id: item?.merchandise_classification?.class_id,
         category_id: category?.category_id,
@@ -244,18 +253,11 @@ const mapProduct = (product, keyword, metadata, pageNo, position) => {
     return cleanValue(record);
 };
 
-const buildBrowserHeaders = (referer) => {
-    const profile = randomProfile();
-    return {
-        accept: 'application/json',
-        'accept-language': 'en-US,en;q=0.9',
-        referer,
-        'sec-ch-ua': profile.secChUa,
-        'sec-ch-ua-mobile': profile.secChUaMobile,
-        'sec-ch-ua-platform': profile.secChUaPlatform,
-        'user-agent': profile.userAgent,
-    };
-};
+const buildTargetHeaders = (referer) => ({
+    accept: 'application/json',
+    'accept-language': 'en-US,en;q=0.9',
+    ...(referer ? { referer } : {}),
+});
 
 const createRequestContext = ({ startUrl, keyword, extracted }) => {
     const pagePath = extracted.pagePath || buildPagePath(keyword, startUrl);
@@ -279,209 +281,154 @@ const createRequestContext = ({ startUrl, keyword, extracted }) => {
     };
 };
 
-const extractDiscoverySummary = async () => {
-    try {
-        const contents = await readFile(API_DISCOVERY_PATH, 'utf8');
-        const firstLines = contents
-            .split(/\r?\n/)
-            .filter(Boolean)
-            .slice(0, 8)
-            .join(' ');
+const impitClients = new Map();
 
-        return firstLines || 'API discovery file is present but empty.';
-    } catch (error) {
-        return `API discovery file could not be read: ${error.message}`;
-    }
-};
+const getImpitClient = (browser, proxyUrl) => {
+    const key = `${browser}|${proxyUrl || 'direct'}`;
+    const cached = impitClients.get(key);
+    if (cached) return cached;
 
-const bootstrapSearchContext = async ({ context, proxyUrl }) => {
-    const headers = buildBrowserHeaders(context.referer);
-    const runtimeSearchParams = {
-        searchTerm: context.keyword,
-        channel: 'web',
-        context: `geo,${context.zip}|${context.latitude}|${context.longitude}|${context.state}|${context.country}`,
-        service: 'redoak,digital-web',
-        source: 'top-of-funnel',
-        state: context.state,
-        tm: 'false',
-        visitor_id: context.visitorId,
-        zip: context.zip,
-    };
+    if (impitClients.size >= IMPIT_CLIENT_CACHE_LIMIT) impitClients.clear();
 
-    const response = await gotScraping.get(SAPPHIRE_RUNTIME_URL, {
-        searchParams: runtimeSearchParams,
+    const client = new Impit({
+        browser,
         proxyUrl,
-        timeout: { request: 45000 },
-        headers,
+        timeout: REQUEST_TIMEOUT_MS,
+        followRedirects: true,
     });
-
-    const runtimeData = JSON.parse(response.body);
-    return {
-        visitorId: runtimeData?.vid || context.visitorId,
-        sapphirePage: runtimeData?.pages?.[0]?.id || context.pagePath,
-        headers,
-    };
+    impitClients.set(key, client);
+    return client;
 };
 
-const parseCduiSearchResponse = (payload) => {
-    const searchModule = (payload?.data_source_modules || [])
-        .find((module) => module?.module_type === 'SearchWebDataSource');
+const isRetryableStatus = (status) => status === 403 || status === 407 || status === 408 || status === 429 || status === 435 || status >= 500;
 
-    const searchResponse = searchModule?.module_data?.search_response;
-    return {
-        products: searchResponse?.products || [],
-        metadata: searchResponse?.search_response?.metadata || {},
-    };
-};
+const requestJson = async ({ url, browser, headers, proxySupplier, label, attempts = MAX_FETCH_ATTEMPTS }) => {
+    let lastError;
+    let useProxy = Boolean(proxySupplier);
 
-const parseLegacyRedskyResponse = (payload) => ({
-    products: payload?.data?.search?.products || [],
-    metadata: payload?.data?.search?.search_response?.metadata || {},
-});
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        let proxyUrl;
+        if (useProxy) {
+            try {
+                proxyUrl = await proxySupplier();
+            } catch (error) {
+                log.debug(`${label}: could not obtain a proxy session (${error.message}); trying direct.`);
+                useProxy = false;
+                proxyUrl = undefined;
+            }
+        }
 
-const fetchCduiPage = async ({
-    context,
-    sapphirePage,
-    offset,
-    batchSize,
-    sortBy,
-    includeSponsored,
-    proxyUrl,
-}) => {
-    const queryString = new URLSearchParams({ searchTerm: context.keyword }).toString();
-    const response = await gotScraping.get(CDUI_API_URL, {
-        proxyUrl,
-        timeout: { request: 45000 },
-        headers: buildBrowserHeaders(context.referer),
-        searchParams: {
-            key: TARGET_API_KEY,
-            platform: 'WEB',
-            privacy_do_not_sell: 'false',
-            targeted_advertising_opt_out: 'false',
-            device_type: 'desktop',
-            sapphire_channel: 'WEB',
-            sapphire_page: sapphirePage,
-            channel: 'WEB',
-            page: sapphirePage,
-            visitor_id: context.visitorId,
-            latitude: context.latitude,
-            longitude: context.longitude,
-            scheduled_delivery_store_id: context.scheduledDeliveryStoreId,
-            scheduled_delivery_zip_code: context.zip,
-            state: context.state,
-            store_id: context.pricingStoreId,
-            zip: context.zip,
-            has_pending_inputs: 'false',
-            count: String(batchSize),
-            default_purchasability_filter: 'false',
-            include_sponsored: String(includeSponsored),
-            new_search: String(offset === 0),
-            offset: String(offset),
-            spellcheck: 'true',
-            keyword: context.keyword,
-            sort_by: sortBy,
-            is_seo_bot: 'false',
-            include_data_source_modules: 'true',
-            query_string: queryString,
-            timezone: 'Asia/Karachi',
-        },
-        throwHttpErrors: false,
-    });
-
-    return {
-        endpoint: 'cdui',
-        statusCode: response.statusCode,
-        payload: JSON.parse(response.body),
-    };
-};
-
-const fetchLegacyRedskyPage = async ({
-    context,
-    offset,
-    batchSize,
-    sortBy,
-    includeSponsored,
-    proxyUrl,
-}) => {
-    const response = await gotScraping.get(LEGACY_REDSKY_URL, {
-        proxyUrl,
-        timeout: { request: 45000 },
-        headers: buildBrowserHeaders(context.referer),
-        searchParams: {
-            key: TARGET_API_KEY,
-            channel: 'WEB',
-            count: String(batchSize),
-            default_purchasability_filter: 'false',
-            include_sponsored: String(includeSponsored),
-            keyword: context.keyword,
-            offset: String(offset),
-            page: context.pagePath,
-            platform: 'desktop',
-            pricing_store_id: context.pricingStoreId,
-            sort_by: sortBy,
-            visitor_id: context.visitorId,
-            zip: context.zip,
-            scheduled_delivery_store_id: context.scheduledDeliveryStoreId,
-            useragent: buildBrowserHeaders(context.referer)['user-agent'],
-        },
-        throwHttpErrors: false,
-    });
-
-    return {
-        endpoint: 'legacy-redsky',
-        statusCode: response.statusCode,
-        payload: JSON.parse(response.body),
-    };
-};
-
-const selectWorkingStrategy = async ({
-    context,
-    sapphirePage,
-    offset,
-    batchSize,
-    sortBy,
-    includeSponsored,
-    proxyUrl,
-}) => {
-    const discoverySummary = await extractDiscoverySummary();
-    log.warning(`Diagnosing Target API failure. API_DISCOVERY.md summary: ${discoverySummary}`);
-
-    const probes = [
-        () => fetchCduiPage({ context, sapphirePage, offset, batchSize, sortBy, includeSponsored, proxyUrl }),
-        () => fetchLegacyRedskyPage({ context, offset, batchSize, sortBy, includeSponsored, proxyUrl }),
-    ];
-
-    for (const probe of probes) {
         try {
-            const result = await probe();
-            const parser = result.endpoint === 'cdui' ? parseCduiSearchResponse : parseLegacyRedskyResponse;
-            const { products, metadata } = parser(result.payload);
-            const reportedError = Array.isArray(result.payload?.errors) ? result.payload.errors[0]?.message : undefined;
+            const client = getImpitClient(browser, proxyUrl);
+            const response = await client.fetch(url, { headers });
+            const { status } = response;
+            const body = await response.text();
 
-            log.info(`Probe ${result.endpoint} returned status ${result.statusCode} with ${products.length} products.`);
-
-            if (reportedError) {
-                log.warning(`Probe ${result.endpoint} reported error: ${reportedError}`);
-                continue;
+            if (status === 407 && proxyUrl) {
+                lastError = new Error('HTTP 407');
+                useProxy = false;
+                log.debug(`${label}: proxy rejected the request on attempt ${attempt}/${attempts}; retrying without a proxy.`);
+            } else if (isRetryableStatus(status)) {
+                lastError = new Error(`HTTP ${status}`);
+                log.debug(`${label}: HTTP ${status} on attempt ${attempt}/${attempts}; rotating proxy.`);
+            } else if (status >= 200 && status < 300) {
+                try {
+                    return { status, payload: JSON.parse(body) };
+                } catch {
+                    lastError = new Error('Invalid JSON response');
+                    log.debug(`${label}: invalid JSON on attempt ${attempt}/${attempts}; retrying.`);
+                }
+            } else {
+                return { status, payload: undefined, body };
             }
-
-            if (result.statusCode >= 400 || products.length === 0) {
-                const topLevelKeys = Object.keys(result.payload || {});
-                log.warning(`Probe ${result.endpoint} was not usable. Top-level keys: ${topLevelKeys.join(', ') || 'none'}`);
-                continue;
-            }
-
-            return {
-                endpoint: result.endpoint,
-                products,
-                metadata,
-            };
         } catch (error) {
-            log.warning(`Probe failed: ${error.message}`);
+            lastError = error;
+            if (proxyUrl) useProxy = false;
+            log.debug(`${label}: request error on attempt ${attempt}/${attempts}: ${error.message}`);
+        }
+
+        if (attempt < attempts) {
+            await sleep(RETRY_BASE_DELAY_MS * attempt + Math.floor(Math.random() * 300));
         }
     }
 
-    throw new Error('No working Target listing endpoint was available after runtime diagnosis.');
+    throw lastError || new Error('Request failed');
+};
+
+const parseCduiSearchResponse = (payload) => {
+    const modules = Array.isArray(payload?.data_source_modules) ? payload.data_source_modules : [];
+
+    let searchResponse;
+    for (const module of modules) {
+        const candidate = module?.module_data?.search_response;
+        if (candidate && (candidate.products || candidate.search_response)) {
+            searchResponse = candidate;
+            break;
+        }
+    }
+
+    return {
+        products: searchResponse?.products || [],
+        metadata: searchResponse?.search_response?.metadata || searchResponse?.metadata || {},
+    };
+};
+
+const buildCduiUrl = ({ context, offset, count, sortBy, includeSponsored }) => {
+    const queryString = new URLSearchParams({ searchTerm: context.keyword }).toString();
+    const params = new URLSearchParams({
+        key: TARGET_API_KEY,
+        platform: 'WEB',
+        privacy_do_not_sell: 'false',
+        targeted_advertising_opt_out: 'false',
+        device_type: 'desktop',
+        sapphire_channel: 'WEB',
+        sapphire_page: context.pagePath,
+        channel: 'WEB',
+        page: context.pagePath,
+        visitor_id: context.visitorId,
+        latitude: context.latitude,
+        longitude: context.longitude,
+        scheduled_delivery_store_id: context.scheduledDeliveryStoreId,
+        scheduled_delivery_zip_code: context.zip,
+        state: context.state,
+        store_id: context.pricingStoreId,
+        zip: context.zip,
+        has_pending_inputs: 'false',
+        count: String(count),
+        default_purchasability_filter: 'false',
+        include_sponsored: String(includeSponsored),
+        new_search: String(offset === 0),
+        offset: String(offset),
+        spellcheck: 'true',
+        keyword: context.keyword,
+        sort_by: sortBy,
+        is_seo_bot: 'false',
+        include_data_source_modules: 'true',
+        query_string: queryString,
+        timezone: 'Asia/Karachi',
+    });
+
+    return `${CDUI_API_URL}?${params}`;
+};
+
+const fetchCduiPage = async ({ context, offset, count, sortBy, includeSponsored, proxySupplier }) => {
+    const { status, payload } = await requestJson({
+        url: buildCduiUrl({ context, offset, count, sortBy, includeSponsored }),
+        browser: LISTING_BROWSER,
+        headers: buildTargetHeaders(context.referer),
+        proxySupplier,
+        label: `listing page offset ${offset}`,
+    });
+
+    if (!payload) {
+        throw new Error(`listing endpoint returned HTTP ${status}`);
+    }
+
+    const parsed = parseCduiSearchResponse(payload);
+    const reportedError = Array.isArray(payload?.errors) ? payload.errors[0]?.message : undefined;
+    if (reportedError && !parsed.products.length) throw new Error(reportedError);
+
+    return parsed;
 };
 
 await Actor.init();
@@ -503,8 +450,6 @@ try {
     const providedStartUrl = trimToUndefined(startUrlInput);
     const keywordInput = trimToUndefined(keywordValue);
 
-    // Keyword mode is exclusive. Ignore any URL that arrived beside it, including
-    // a platform-resolved URL default or a Console value left from another mode.
     const startUrl = keywordInput ? undefined : providedStartUrl || DEFAULT_SEARCH_URL;
     const extracted = parseStartUrl(startUrl);
     const keyword = keywordInput || extracted.keyword;
@@ -521,106 +466,78 @@ try {
     const maxPages = toPositiveInt(maxPagesInput, 10);
     const sortBy = trimToUndefined(extracted.sortBy) || trimToUndefined(sortByInput) || 'relevance';
     const includeSponsored = extracted.includeSponsored ?? parseBoolean(includeSponsoredInput, true);
-    const proxyConfig = proxyConfiguration
-        ? await Actor.createProxyConfiguration(proxyConfiguration)
-        : undefined;
+
+    let proxyConfig;
+    if (proxyConfiguration) {
+        try {
+            proxyConfig = await Actor.createProxyConfiguration(proxyConfiguration);
+        } catch (error) {
+            log.warning(`Proxy configuration is unavailable (${error.message}); continuing without a proxy.`);
+            proxyConfig = undefined;
+        }
+    }
+    const proxySupplier = proxyConfig ? () => proxyConfig.newUrl() : undefined;
 
     const context = createRequestContext({ startUrl, keyword, extracted });
-    const proxyUrl = proxyConfig ? await proxyConfig.newUrl() : undefined;
-    const bootstrapped = await bootstrapSearchContext({ context, proxyUrl });
-
-    context.visitorId = bootstrapped.visitorId;
-    context.pagePath = bootstrapped.sapphirePage || context.pagePath;
 
     let offset = 0;
     let pageNo = 1;
     let saved = 0;
-    let activeEndpoint = 'cdui';
+    let firstPageFailed = false;
     const seenTcins = new Set();
 
     while (saved < resultsWanted && pageNo <= maxPages) {
         const batchSize = Math.min(PAGE_SIZE_LIMIT, resultsWanted - saved);
-        log.info(`Fetching page ${pageNo} (offset=${offset}, count=${batchSize}, endpoint=${activeEndpoint})`);
+        log.info(`Fetching page ${pageNo} (offset=${offset}, count=${batchSize})`);
 
         let products = [];
         let metadata = {};
 
         try {
-            if (activeEndpoint === 'cdui') {
-                const result = await fetchCduiPage({
-                    context,
-                    sapphirePage: context.pagePath,
-                    offset,
-                    batchSize,
-                    sortBy,
-                    includeSponsored,
-                    proxyUrl,
-                });
-
-                ({ products, metadata } = parseCduiSearchResponse(result.payload));
-                if (result.statusCode >= 400) {
-                    const errorMessage = Array.isArray(result.payload?.errors) ? result.payload.errors[0]?.message : undefined;
-                    throw new Error(errorMessage || `CDUI listing endpoint returned HTTP ${result.statusCode}`);
-                }
-
-                if (products.length === 0) {
-                    const redirectUrl = trimToUndefined(metadata?.redirect_url);
-                    if (redirectUrl) {
-                        log.warning(`Target redirected this search to ${redirectUrl} and returned no direct product results.`);
-                        break;
-                    }
-
-                    throw new Error('CDUI returned no products and no category redirect metadata.');
-                }
-            } else {
-                const result = await fetchLegacyRedskyPage({
-                    context,
-                    offset,
-                    batchSize,
-                    sortBy,
-                    includeSponsored,
-                    proxyUrl,
-                });
-
-                ({ products, metadata } = parseLegacyRedskyResponse(result.payload));
-                if (result.statusCode >= 400 || products.length === 0) {
-                    const errorMessage = Array.isArray(result.payload?.errors) ? result.payload.errors[0]?.message : undefined;
-                    throw new Error(errorMessage || `Legacy listing endpoint returned status ${result.statusCode}`);
-                }
-            }
-        } catch (error) {
-            log.warning(`Page ${pageNo} failed on endpoint ${activeEndpoint}: ${error.message}`);
-            const diagnosed = await selectWorkingStrategy({
+            ({ products, metadata } = await fetchCduiPage({
                 context,
-                sapphirePage: context.pagePath,
                 offset,
-                batchSize,
+                count: batchSize,
                 sortBy,
                 includeSponsored,
-                proxyUrl,
-            });
-
-            activeEndpoint = diagnosed.endpoint;
-            products = diagnosed.products;
-            metadata = diagnosed.metadata;
+                proxySupplier,
+            }));
+        } catch (error) {
+            if (pageNo === 1) {
+                log.error(`Stopping pagination: page ${pageNo} could not be fetched (${error.message}).`);
+                firstPageFailed = true;
+            } else {
+                log.warning(`Finished early after a temporary block while paging (${error.message}); returning the ${saved} product${saved === 1 ? '' : 's'} collected so far.`);
+            }
+            break;
         }
 
         if (!products.length) {
-            log.info('No more products found, stopping pagination.');
+            const redirectUrl = trimToUndefined(metadata?.redirect_url);
+            if (redirectUrl) {
+                log.warning(`Target redirected this search to ${redirectUrl} and returned no direct product results.`);
+            } else {
+                log.info('No more products available, stopping pagination.');
+            }
             break;
         }
 
         const records = [];
         for (const product of products) {
             if (saved + records.length >= resultsWanted) break;
-            const tcin = product?.tcin;
-            if (tcin && seenTcins.has(tcin)) continue;
 
-            const mapped = mapProduct(product, keyword, metadata, pageNo, offset + records.length + 1);
-            if (!mapped || Object.keys(mapped).length === 0) continue;
+            const tcinKey = product?.tcin != null ? String(product.tcin) : undefined;
+            if (tcinKey && seenTcins.has(tcinKey)) continue;
 
-            if (tcin) seenTcins.add(tcin);
-            records.push(mapped);
+            try {
+                const mapped = mapProduct(product, keyword, metadata, pageNo, offset + records.length + 1);
+                if (!mapped || Object.keys(mapped).length === 0) continue;
+
+                if (tcinKey) seenTcins.add(tcinKey);
+                records.push(mapped);
+            } catch (error) {
+                log.warning(`Skipping product${tcinKey ? ` ${tcinKey}` : ''}: ${error.message}`);
+            }
         }
 
         if (!records.length) {
@@ -645,7 +562,14 @@ try {
         }
     }
 
-    log.info(`Extraction complete. Saved ${saved} products.`);
+    if (saved > 0) {
+        log.info(`Extraction complete. Saved ${saved} products.`);
+    } else if (firstPageFailed) {
+        log.error('No products were collected because the listing endpoint was unavailable.');
+        exitCode = 1;
+    } else {
+        log.info('Extraction complete. No products matched this search.');
+    }
 } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.error(`Actor run failed: ${message}`);

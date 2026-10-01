@@ -59,10 +59,11 @@
     "proxyConfiguration": {
       "title": "Proxy Configuration",
       "type": "object",
-      "description": "Proxy settings for reliable data collection.",
+      "description": "Proxy settings for reliable data collection. A rotating US residential proxy is used by default to reduce blocks.",
       "editor": "proxy",
       "default": {
-        "useApifyProxy": false
+        "useApifyProxy": true,
+        "apifyProxyGroups": ["RESIDENTIAL"]
       }
     }
   },

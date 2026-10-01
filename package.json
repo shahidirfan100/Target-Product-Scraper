@@ -6,16 +6,15 @@
   "dependencies": {
     "apify": "^3.7.2",
     "crawlee": "^3.18.1",
-    "cheerio": "^1.2.0",
-    "got-scraping": "^4.2.1"
+    "impit": "^0.14.5"
   },
-    "devDependencies": {
-      "@apify/eslint-config": "^2.0.0",
-      "eslint": "^9.29.0",
-      "eslint-config-prettier": "^10.1.5",
-      "prettier": "^3.5.3",
-      "vitest": "^4.1.0"
-    },
+  "devDependencies": {
+    "@apify/eslint-config": "^2.0.0",
+    "eslint": "^9.29.0",
+    "eslint-config-prettier": "^10.1.5",
+    "prettier": "^3.5.3",
+    "vitest": "^4.1.0"
+  },
   "scripts": {
     "start": "node src/main.js",
     "format": "prettier --write .",

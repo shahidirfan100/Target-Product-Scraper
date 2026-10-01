@@ -72,7 +72,7 @@ Use `keyword` or `startUrl` as one search mode. If both are present, `keyword` t
 | `results_wanted`     | Integer | No       | `20`                       | Maximum number of products to save. Minimum value is `1`.                         |
 | `max_pages`          | Integer | No       | `10`                       | Maximum number of listing pages to process. Minimum value is `1`.                 |
 | `include_sponsored`  | Boolean | No       | `true`                     | Include sponsored products in the dataset.                                        |
-| `proxyConfiguration` | Object  | No       | `{"useApifyProxy": false}` | Optional Apify Proxy configuration for the run.                                   |
+| `proxyConfiguration` | Object  | No       | US residential Apify Proxy (enabled) | Proxy configuration for the run. A rotating US residential proxy is used by default to keep collection reliable. |
 
 `*` A usable search value is always available: the Actor uses a supplied `keyword`, then a supplied `startUrl`, and falls back to its configured default URL when neither is present. When both search fields are present, only `keyword` is used.
 
