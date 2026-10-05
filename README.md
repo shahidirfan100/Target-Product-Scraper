@@ -60,13 +60,13 @@ Each dataset item represents one product listing. Empty values are omitted when 
 5. Start the run and review the dataset preview.
 6. Download the results or connect the dataset to your next workflow.
 
-Use `keyword` or `startUrl` as one search mode. If both are present, `keyword` takes precedence and the URL is ignored. When neither is provided, the Actor uses its configured wireless-headphones search URL. The `startUrl` value is both the single UI prefill and the schema default; the runtime also uses the same documented default if the run input is empty. Omitted result controls use their own runtime defaults, while explicit values are preserved.
+Use `keyword` or `startUrl` as one search mode. If both are present, `keyword` takes precedence and the URL is ignored. When neither is provided, the Actor uses its configured coffee search URL. The `startUrl` value is both the single UI prefill and the schema default; the runtime also uses the same documented default if the run input is empty. Omitted result controls use their own runtime defaults, while explicit values are preserved.
 
 ## Input Parameters
 
 | Parameter            | Type    | Required | Default / UI prefill       | Description                                                                       |
 | -------------------- | ------- | -------- | -------------------------- | --------------------------------------------------------------------------------- |
-| `startUrl`           | String  | No*      | `https://www.target.com/s?searchTerm=wireless%20headphones` (default and UI prefill) | Public Target listing URL, used when `keyword` is empty. |
+| `startUrl`           | String  | No*      | `https://www.target.com/s?searchTerm=coffee` (default and UI prefill) | Public Target listing URL, used when `keyword` is empty. |
 | `keyword`            | String  | No*      | None                       | Search keyword used to collect products. Provide this or a valid `startUrl`.      |
 | `sort_by`            | String  | No       | `relevance`                | Result order. Supported values are `relevance` and `newest`.                      |
 | `results_wanted`     | Integer | No       | `20`                       | Maximum number of products to save. Minimum value is `1`.                         |

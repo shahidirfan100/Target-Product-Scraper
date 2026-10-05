@@ -7,10 +7,10 @@
     "startUrl": {
       "title": "Start URL",
       "type": "string",
-      "description": "Target listing URL. This URL is used when Keyword is empty. If both are provided, Keyword mode takes precedence and this URL is ignored. Defaults to a wireless headphones search when no search input is provided.",
+      "description": "Public Target listing URL. This URL is used when Keyword is empty. If both are provided, Keyword mode takes precedence and this URL is ignored. Defaults to a coffee search when no search input is provided.",
       "editor": "textfield",
-      "default": "https://www.target.com/s?searchTerm=wireless%20headphones",
-      "prefill": "https://www.target.com/s?searchTerm=wireless%20headphones"
+      "default": "https://www.target.com/s?searchTerm=coffee",
+      "prefill": "https://www.target.com/s?searchTerm=coffee"
     },
     "keyword": {
       "title": "Keyword",
@@ -63,7 +63,8 @@
       "editor": "proxy",
       "default": {
         "useApifyProxy": true,
-        "apifyProxyGroups": ["RESIDENTIAL"]
+        "apifyProxyGroups": ["RESIDENTIAL"],
+        "apifyProxyCountry": "US"
       }
     }
   },

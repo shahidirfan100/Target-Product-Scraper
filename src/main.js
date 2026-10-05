@@ -1,4 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { Actor, log } from 'apify';
 import { Dataset } from 'crawlee';
@@ -8,22 +11,36 @@ const TARGET_API_KEY = '9f36aeafbe60771e321a7cc95a78140772ab3e96';
 const CDUI_API_URL = 'https://cdui-orchestrations.target.com/cdui_orchestrations/v1/pages/slp';
 
 const LISTING_BROWSER = 'chrome151';
+const BROWSER_PROFILES = [
+    'chrome151',
+    'chrome142',
+    'chrome136',
+    'chrome131',
+    'chrome125',
+    'chrome',
+    'firefox144',
+    'ios18',
+];
 
 const PAGE_SIZE_LIMIT = 24;
 
 const REQUEST_TIMEOUT_MS = 45000;
-const MAX_FETCH_ATTEMPTS = 6;
+const MAX_FETCH_ATTEMPTS = 8;
 const RETRY_BASE_DELAY_MS = 800;
-const IMPIT_CLIENT_CACHE_LIMIT = 64;
+const RETRY_MAX_DELAY_MS = 8000;
+const IMPIT_CLIENT_CACHE_LIMIT = 96;
 
-const DEFAULT_SEARCH_URL = 'https://www.target.com/s?searchTerm=wireless%20headphones';
+const API_DISCOVERY_FILENAME = 'API_DISCOVERY.md';
+
+const DEFAULT_SEARCH_URL = 'https://www.target.com/s?searchTerm=coffee';
 const DEFAULT_STORE_ID = '3991';
 const DEFAULT_SCHEDULED_STORE_ID = '810';
 const DEFAULT_ZIP = '61010';
-const DEFAULT_STATE = 'PB';
-const DEFAULT_COUNTRY = 'PK';
-const DEFAULT_LATITUDE = '30.170';
-const DEFAULT_LONGITUDE = '72.680';
+const DEFAULT_STATE = 'IL';
+const DEFAULT_COUNTRY = 'US';
+const DEFAULT_LATITUDE = '42.3497';
+const DEFAULT_LONGITUDE = '-89.9201';
+const DEFAULT_TIMEZONE = 'America/Chicago';
 
 const sleep = (ms) => new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -36,6 +53,77 @@ const toPositiveInt = (value, fallback) => {
 };
 
 const randomVisitorId = () => randomBytes(16).toString('hex').toUpperCase();
+
+const randomToken = (bytes = 4) => randomBytes(bytes).toString('hex');
+
+const withDiagnostics = (error, diagnostics = {}) => {
+    const normalized = error instanceof Error ? error : new Error(String(error));
+    Object.assign(normalized, diagnostics);
+    return normalized;
+};
+
+const topLevelKeys = (body) => {
+    if (typeof body !== 'string' || !body) return 'empty';
+    try {
+        const parsed = JSON.parse(body);
+        if (parsed && typeof parsed === 'object') return Object.keys(parsed).slice(0, 12).join(',') || 'object';
+        return typeof parsed;
+    } catch {
+        return `non-json(${body.replace(/\s+/g, ' ').slice(0, 80)})`;
+    }
+};
+
+const parseRetryAfter = (response) => {
+    const raw = response?.headers?.get?.('retry-after');
+    if (!raw) return undefined;
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, RETRY_MAX_DELAY_MS);
+    const when = Date.parse(raw);
+    if (Number.isFinite(when)) return Math.max(0, Math.min(when - Date.now(), RETRY_MAX_DELAY_MS));
+    return undefined;
+};
+
+const retryDelay = (attempt, retryAfter) => {
+    if (typeof retryAfter === 'number') return retryAfter;
+    const exponential = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+    return Math.min(exponential, RETRY_MAX_DELAY_MS) + Math.floor(Math.random() * 400);
+};
+
+const pickBrowser = (attempt) => BROWSER_PROFILES[(attempt - 1) % BROWSER_PROFILES.length] || LISTING_BROWSER;
+
+let apiDiscoveryGuidance;
+const readApiDiscoveryGuidance = async () => {
+    if (apiDiscoveryGuidance !== undefined) return apiDiscoveryGuidance;
+
+    const location = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', API_DISCOVERY_FILENAME);
+    try {
+        const content = await readFile(location, 'utf8');
+        const marker = '## Auto-Healing Guidance';
+        const index = content.indexOf(marker);
+        apiDiscoveryGuidance = (index >= 0 ? content.slice(index + marker.length) : content.slice(-1200)).trim();
+    } catch (error) {
+        log.debug(`Auto-healing: could not read ${API_DISCOVERY_FILENAME} (${error.message}).`);
+        apiDiscoveryGuidance = '';
+    }
+
+    return apiDiscoveryGuidance;
+};
+
+const diagnoseRequestFailure = async (error, { label, proxyMode }) => {
+    const detail = error?.status ? `HTTP ${error.status}` : error?.message || 'unknown error';
+    const context = [
+        error?.browser ? `browser=${error.browser}` : undefined,
+        `transport=${proxyMode}`,
+        error?.bodyKeys ? `body-keys=${error.bodyKeys}` : undefined,
+    ].filter(Boolean).join(' ');
+
+    log.error(`${label} failed after retries (${detail}; ${context}).`);
+
+    const guidance = await readApiDiscoveryGuidance();
+    if (guidance) {
+        log.warning(`${API_DISCOVERY_FILENAME} auto-healing guidance:\n${guidance}`);
+    }
+};
 
 const trimToUndefined = (value) => {
     if (typeof value !== 'string') return undefined;
@@ -277,6 +365,7 @@ const createRequestContext = ({ startUrl, keyword, extracted }) => {
         country: DEFAULT_COUNTRY,
         latitude: String(extracted.latitude || DEFAULT_LATITUDE),
         longitude: String(extracted.longitude || DEFAULT_LONGITUDE),
+        timezone: DEFAULT_TIMEZONE,
         referer,
     };
 };
@@ -288,7 +377,16 @@ const getImpitClient = (browser, proxyUrl) => {
     const cached = impitClients.get(key);
     if (cached) return cached;
 
-    if (impitClients.size >= IMPIT_CLIENT_CACHE_LIMIT) impitClients.clear();
+    if (impitClients.size >= IMPIT_CLIENT_CACHE_LIMIT) {
+        for (const client of impitClients.values()) {
+            try {
+                client?.close?.();
+            } catch {
+                // Ignore close errors; the client is being discarded anyway.
+            }
+        }
+        impitClients.clear();
+    }
 
     const client = new Impit({
         browser,
@@ -300,56 +398,65 @@ const getImpitClient = (browser, proxyUrl) => {
     return client;
 };
 
-const isRetryableStatus = (status) => status === 403 || status === 407 || status === 408 || status === 429 || status === 435 || status >= 500;
+const isRetryableStatus = (status) => status === 403 || status === 407 || status === 408 || status === 425 || status === 429 || status === 435 || status >= 500;
 
-const requestJson = async ({ url, browser, headers, proxySupplier, label, attempts = MAX_FETCH_ATTEMPTS }) => {
+const requestJson = async ({ buildUrl, headers, proxySupplier, label, attempts = MAX_FETCH_ATTEMPTS }) => {
     let lastError;
-    let useProxy = Boolean(proxySupplier);
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        const browser = pickBrowser(attempt);
         let proxyUrl;
-        if (useProxy) {
+
+        if (proxySupplier) {
             try {
                 proxyUrl = await proxySupplier();
             } catch (error) {
-                log.debug(`${label}: could not obtain a proxy session (${error.message}); trying direct.`);
-                useProxy = false;
+                log.debug(`${label}: proxy session unavailable on attempt ${attempt}/${attempts} (${error.message}); trying a direct request.`);
                 proxyUrl = undefined;
             }
         }
 
+        let response;
         try {
             const client = getImpitClient(browser, proxyUrl);
-            const response = await client.fetch(url, { headers });
-            const { status } = response;
-            const body = await response.text();
-
-            if (status === 407 && proxyUrl) {
-                lastError = new Error('HTTP 407');
-                useProxy = false;
-                log.debug(`${label}: proxy rejected the request on attempt ${attempt}/${attempts}; retrying without a proxy.`);
-            } else if (isRetryableStatus(status)) {
-                lastError = new Error(`HTTP ${status}`);
-                log.debug(`${label}: HTTP ${status} on attempt ${attempt}/${attempts}; rotating proxy.`);
-            } else if (status >= 200 && status < 300) {
-                try {
-                    return { status, payload: JSON.parse(body) };
-                } catch {
-                    lastError = new Error('Invalid JSON response');
-                    log.debug(`${label}: invalid JSON on attempt ${attempt}/${attempts}; retrying.`);
-                }
-            } else {
-                return { status, payload: undefined, body };
-            }
+            response = await client.fetch(buildUrl(attempt), { headers });
         } catch (error) {
-            lastError = error;
-            if (proxyUrl) useProxy = false;
-            log.debug(`${label}: request error on attempt ${attempt}/${attempts}: ${error.message}`);
+            lastError = withDiagnostics(error, { browser });
+            log.debug(`${label}: request error on attempt ${attempt}/${attempts} (browser=${browser}): ${error.message}`);
+            if (attempt < attempts) await sleep(retryDelay(attempt));
+            continue;
         }
 
-        if (attempt < attempts) {
-            await sleep(RETRY_BASE_DELAY_MS * attempt + Math.floor(Math.random() * 300));
+        let body = '';
+        try {
+            body = await response.text();
+        } catch {
+            // Treat an unreadable body as empty; status handling below decides recovery.
         }
+
+        const { status } = response;
+
+        if (status >= 200 && status < 300) {
+            try {
+                return { status, payload: JSON.parse(body) };
+            } catch {
+                lastError = withDiagnostics(new Error('Invalid JSON response'), { status, bodyKeys: topLevelKeys(body), browser });
+                log.debug(`${label}: non-JSON body on attempt ${attempt}/${attempts} (browser=${browser}).`);
+                if (attempt < attempts) await sleep(retryDelay(attempt));
+                continue;
+            }
+        }
+
+        const bodyKeys = topLevelKeys(body);
+
+        if (!isRetryableStatus(status)) {
+            log.warning(`${label}: non-retryable HTTP ${status} (body-keys=${bodyKeys}).`);
+            throw withDiagnostics(new Error(`HTTP ${status}`), { status, bodyKeys, browser });
+        }
+
+        lastError = withDiagnostics(new Error(`HTTP ${status}`), { status, bodyKeys, browser });
+        log.debug(`${label}: HTTP ${status} on attempt ${attempt}/${attempts} (browser=${browser}, proxy=${proxyUrl ? 'yes' : 'no'}, body-keys=${bodyKeys}); rotating fingerprint and exit IP.`);
+        if (attempt < attempts) await sleep(retryDelay(attempt, parseRetryAfter(response)));
     }
 
     throw lastError || new Error('Request failed');
@@ -369,7 +476,10 @@ const parseCduiSearchResponse = (payload) => {
 
     return {
         products: searchResponse?.products || [],
-        metadata: searchResponse?.search_response?.metadata || searchResponse?.metadata || {},
+        metadata: {
+            ...(searchResponse?.search_response?.metadata || searchResponse?.metadata || {}),
+            ...(trimToUndefined(payload?.redirect_url) ? { redirect_url: payload.redirect_url } : {}),
+        },
     };
 };
 
@@ -405,7 +515,7 @@ const buildCduiUrl = ({ context, offset, count, sortBy, includeSponsored }) => {
         is_seo_bot: 'false',
         include_data_source_modules: 'true',
         query_string: queryString,
-        timezone: 'Asia/Karachi',
+        timezone: context.timezone,
     });
 
     return `${CDUI_API_URL}?${params}`;
@@ -413,8 +523,13 @@ const buildCduiUrl = ({ context, offset, count, sortBy, includeSponsored }) => {
 
 const fetchCduiPage = async ({ context, offset, count, sortBy, includeSponsored, proxySupplier }) => {
     const { status, payload } = await requestJson({
-        url: buildCduiUrl({ context, offset, count, sortBy, includeSponsored }),
-        browser: LISTING_BROWSER,
+        buildUrl: (attempt) => buildCduiUrl({
+            context: attempt === 1 ? context : { ...context, visitorId: randomVisitorId() },
+            offset,
+            count,
+            sortBy,
+            includeSponsored,
+        }),
         headers: buildTargetHeaders(context.referer),
         proxySupplier,
         label: `listing page offset ${offset}`,
@@ -429,6 +544,20 @@ const fetchCduiPage = async ({ context, offset, count, sortBy, includeSponsored,
     if (reportedError && !parsed.products.length) throw new Error(reportedError);
 
     return parsed;
+};
+
+const resolveProxyInput = (input) => {
+    if (!input || typeof input !== 'object') return undefined;
+    const hasCustomUrls = Array.isArray(input.proxyUrls) && input.proxyUrls.length > 0;
+    if (input.useApifyProxy === false && !hasCustomUrls) return undefined;
+    return input;
+};
+
+const describeProxy = (config) => {
+    if (!config) return 'direct (no proxy)';
+    if (Array.isArray(config.proxyUrls) && config.proxyUrls.length) return 'custom proxy URLs';
+    const groups = Array.isArray(config.apifyProxyGroups) ? config.apifyProxyGroups.join('+') : 'default';
+    return `apify ${groups} (${config.apifyProxyCountry || 'any country'})`;
 };
 
 await Actor.init();
@@ -467,16 +596,26 @@ try {
     const sortBy = trimToUndefined(extracted.sortBy) || trimToUndefined(sortByInput) || 'relevance';
     const includeSponsored = extracted.includeSponsored ?? parseBoolean(includeSponsoredInput, true);
 
+    let requestedProxy = resolveProxyInput(proxyConfiguration);
+    if (!requestedProxy && Actor.isAtHome()) {
+        requestedProxy = { useApifyProxy: true, apifyProxyGroups: ['RESIDENTIAL'] };
+    }
+
     let proxyConfig;
-    if (proxyConfiguration) {
+    if (requestedProxy) {
         try {
-            proxyConfig = await Actor.createProxyConfiguration(proxyConfiguration);
+            proxyConfig = await Actor.createProxyConfiguration(requestedProxy);
         } catch (error) {
             log.warning(`Proxy configuration is unavailable (${error.message}); continuing without a proxy.`);
             proxyConfig = undefined;
         }
     }
-    const proxySupplier = proxyConfig ? () => proxyConfig.newUrl() : undefined;
+
+    const proxyMode = describeProxy(proxyConfig ? requestedProxy : undefined);
+    const proxySupplier = proxyConfig
+        ? () => proxyConfig.newUrl(`s${randomToken(4)}`)
+        : undefined;
+    log.info(`Transport: ${proxyMode}.`);
 
     const context = createRequestContext({ startUrl, keyword, extracted });
 
@@ -503,11 +642,12 @@ try {
                 proxySupplier,
             }));
         } catch (error) {
+            await diagnoseRequestFailure(error, { label: `Listing page ${pageNo}`, proxyMode });
             if (pageNo === 1) {
-                log.error(`Stopping pagination: page ${pageNo} could not be fetched (${error.message}).`);
+                log.error(`Stopping pagination: page ${pageNo} could not be fetched.`);
                 firstPageFailed = true;
             } else {
-                log.warning(`Finished early after a temporary block while paging (${error.message}); returning the ${saved} product${saved === 1 ? '' : 's'} collected so far.`);
+                log.warning(`Finished early after a temporary block while paging; returning the ${saved} product${saved === 1 ? '' : 's'} collected so far.`);
             }
             break;
         }

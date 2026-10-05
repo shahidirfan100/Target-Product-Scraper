@@ -32,22 +32,42 @@ All profiles below returned `HTTP 200` with 29-30 products for offset 0 and clea
 | --- | --- | --- | --- | --- |
 | `chrome151` | 200 (29) | 200 (30) | 200 (30) | 200 (24) |
 | `chrome142` | 200 (29) | 200 (30) | 200 (30) | 200 (24) |
+| `chrome136` | 200 (30) | - | - | - |
 | `chrome131` | 200 (29) | 200 (30) | 200 (30) | 200 (24) |
+| `chrome125` | 200 (30) | - | - | - |
+| `chrome` | 200 (30) | - | - | - |
 | `firefox144` | 200 (29) | 200 (30) | 200 (30) | 200 (24) |
+| `firefox133` | 200 (30) | - | - | - |
+| `firefox` | 200 (30) | - | - | - |
 | `ios18` | 200 (29) | 200 (30) | 200 (30) | 200 (24) |
+| `okhttp4` | 200 (30) | - | - | - |
 
 `chrome151` is used as the primary profile because it is the newest supported Chrome fingerprint. Reviews (`r2d2.target.com`) also responded `200` on every profile, but reviews are intentionally not collected by this actor.
+
+### Runtime browser rotation
+
+The actor does not depend on a single fingerprint. Every request attempt uses the next profile in `BROWSER_PROFILES = [chrome151, chrome142, chrome136, chrome131, chrome125, chrome, firefox144, ios18]`, so a fingerprint-level block on one profile is recovered by the next attempt instead of failing the run.
 
 ## Failure Diagnosis: HTTP 435
 
 The previous `got-scraping` implementation intermittently received `HTTP 435` with a body whose top-level keys were `appId`, `blockScript`, `firstPartyEnabled`, `hostUrl`, `jsClientSrc`, `uuid`, `vid`. That is a HUMAN / PerimeterX bot-defense block page, not a Target application error. It is triggered per client/IP reputation and can appear after only one successful request on a residential exit IP.
 
+### Root cause of the recurring run failure (2026-10-05)
+
+A scheduled run failed page 1 with `HTTP 435` on all retry attempts. Direct `impit` probing from a residential IP returned clean `200` data on every profile, which isolated the failure to the runtime exit quality and request consistency rather than the endpoint or parsing. Two concrete mismatches were found and fixed:
+
+1. **Country was not pinned on Apify Proxy.** The default proxy input requested rotating `RESIDENTIAL` but left the country open, so exits could come from outside the US while Target is US-only. The country mismatch is a strong bot-defense trigger.
+2. **Geo parameters contradicted the exit.** The request sent US `zip`/`store_id` values together with `state=PB`, Pakistan coordinates (`30.170, 72.680`), and `timezone=Asia/Karachi`. A US residential exit paired with Pakistan geo signals is internally inconsistent and is treated as suspicious.
+
 Fixes applied:
 
 - Switched the request client from `got-scraping` to `impit` browser emulation so the TLS/HTTP2 fingerprint and header order match a real browser, while removing hand-written and potentially contradictory `user-agent` / `sec-ch-ua` headers.
-- Rotate the Apify proxy session for every request attempt (a fresh exit IP per request) instead of reusing one exit IP for the whole run.
-- Bounded retries with backoff for `403`, `408`, `429`, `435`, and `5xx`, plus malformed JSON bodies. Permanent `4xx` responses are not retried.
-- Every fetch and parse is wrapped so one bad page stops pagination gracefully instead of throwing an uncaught exception.
+- Add `apifyProxyCountry: 'US'` to the input schema's default proxy configuration so the shipped default exits correctly; US residential is the most stable option for Target. The actor itself does not force a country and uses whatever `proxyConfiguration` the input supplies.
+- Keep the request geo internally consistent: `state=IL`, `zip=61010`, Illinois coordinates, and `timezone=America/Chicago` by default.
+- Rotate the browser profile, the Apify proxy session, and the `visitor_id` on every retry attempt (a fresh fingerprint and exit IP per retry) instead of holding one fingerprint and one exit IP for the whole run.
+- Bounded retries with exponential backoff and jitter for `403`, `407`, `408`, `425`, `429`, `435`, and `5xx`, plus malformed JSON bodies. `Retry-After` is honored when present and capped. Permanent `4xx` responses are not retried.
+- Keep using the proxy on transient network errors; only an unusable proxy (missing credentials or `407`) falls back to a direct request.
+- Every fetch and parse is wrapped so one bad page stops pagination gracefully instead of throwing an uncaught exception. On failure the actor reads this file and logs the auto-healing guidance plus the failing status, browser profile, transport, and response keys.
 
 ## Rejected / Fallback Candidates
 
@@ -71,6 +91,7 @@ Fixes applied:
 ## Live Validation Notes
 
 - Direct `impit` probes confirmed the CDUI endpoint returned clean product data for `offset=0/24/144/216` with `chrome151`, `chrome142`, `chrome131`, `firefox144`, and `ios18`.
+- A 2026-10-05 re-probe confirmed clean `200` responses (29-30 products) for `chrome151`, `chrome142`, `chrome136`, `chrome131`, `chrome125`, `chrome`, `firefox144`, `firefox133`, `firefox`, `ios18`, and `okhttp4` from a residential IP, which shows the `435` failures are proxy/geo/fingerprint reputation issues rather than a broken endpoint.
 - `offset` 216 returned 24 products while earlier pages returned 29-30, confirming live pagination.
 - A search that Target redirects (for example `womens tops`) returns a `redirect_url` with no product array and is handled as a clean stop, not an error.
 
@@ -89,7 +110,15 @@ With `impit` these fingerprint headers are generated by the emulated browser. On
 
 ## Auto-Healing Guidance
 
-- If the actor fails, read this file first.
-- A `435` response is a bot-defense block: rotate the proxy session and retry with a bounded budget; do not treat it as target data.
+- If the actor fails, read this file first. The actor does this automatically on a page failure and logs this section.
+- A `435` response is a bot-defense block: rotate the browser profile, the proxy session, and the `visitor_id`, then retry with a bounded budget; do not treat it as target data.
+- Keep the proxy on US residential where possible. The input schema default sets `apifyProxyCountry: 'US'` because it is the most stable for Target, but the actor honors any `proxyConfiguration` the caller supplies. Non-US exits and geo-parameter mismatches (`state`, coordinates, `timezone` vs `zip`) are common `435` triggers.
 - If CDUI stops returning products but returns `200`, log the response keys and check for a `redirect_url` before retrying.
 - Do not reintroduce the RedSky listing endpoint as a paginator; it is broken beyond `offset=0`.
+- Do not collapse the browser rotation back to a single fixed profile; the rotation is the recovery mechanism when one fingerprint is temporarily blocked.
+
+## Proxy Options
+
+- **Apify Residential (recommended):** best fit for Target. The input schema default is `RESIDENTIAL` with `apifyProxyCountry: 'US'`. Change the country in `proxyConfiguration` if needed; the actor reads the input as-is and does not override it. The actor rotates a fresh session id per attempt.
+- **Custom proxy URLs / unblocker endpoints:** supply `proxyConfiguration.proxyUrls`. The actor preserves custom URLs untouched and rotates them per attempt. A managed unblocker or residential endpoint that exits in the US is a valid drop-in and does not require any code change.
+- **Apify datacenter:** works for a subset of exits but is more likely to receive `435`; keep residential as the default.
