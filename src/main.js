@@ -24,8 +24,9 @@ const BROWSER_PROFILES = [
 
 const PAGE_SIZE_LIMIT = 24;
 
-const REQUEST_TIMEOUT_MS = 45000;
+const REQUEST_TIMEOUT_MS = 20000;
 const MAX_FETCH_ATTEMPTS = 8;
+const MAX_FETCH_BUDGET_MS = 120000;
 const RETRY_BASE_DELAY_MS = 800;
 const RETRY_MAX_DELAY_MS = 8000;
 const IMPIT_CLIENT_CACHE_LIMIT = 96;
@@ -83,10 +84,18 @@ const parseRetryAfter = (response) => {
     return undefined;
 };
 
-const retryDelay = (attempt, retryAfter) => {
-    if (typeof retryAfter === 'number') return retryAfter;
-    const exponential = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
-    return Math.min(exponential, RETRY_MAX_DELAY_MS) + Math.floor(Math.random() * 400);
+const retryDelay = (attempt, retryAfter, deadline) => {
+    let delay;
+    if (typeof retryAfter === 'number') {
+        delay = retryAfter;
+    } else {
+        const exponential = RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+        delay = Math.min(exponential, RETRY_MAX_DELAY_MS) + Math.floor(Math.random() * 400);
+    }
+    if (typeof deadline === 'number') {
+        delay = Math.min(delay, Math.max(0, deadline - Date.now()));
+    }
+    return Math.max(0, delay);
 };
 
 const pickBrowser = (attempt) => BROWSER_PROFILES[(attempt - 1) % BROWSER_PROFILES.length] || LISTING_BROWSER;
@@ -200,7 +209,8 @@ const parseStartUrl = (startUrl) => {
             includeSponsored: parsed.searchParams.has('include_sponsored')
                 ? parseBoolean(parsed.searchParams.get('include_sponsored'), true)
                 : undefined,
-            sortBy: trimToUndefined(parsed.searchParams.get('sort_by')),
+            sortBy: trimToUndefined(parsed.searchParams.get('sort_by'))
+                || trimToUndefined(parsed.searchParams.get('sortBy')),
         };
     } catch {
         return {};
@@ -402,12 +412,19 @@ const isRetryableStatus = (status) => status === 403 || status === 407 || status
 
 const requestJson = async ({ buildUrl, headers, proxySupplier, label, attempts = MAX_FETCH_ATTEMPTS }) => {
     let lastError;
+    let proxyDisabled = false;
+    const deadline = Date.now() + MAX_FETCH_BUDGET_MS;
 
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        if (Date.now() >= deadline) {
+            log.debug(`${label}: retry time budget exhausted after ${attempt - 1} attempt(s).`);
+            break;
+        }
+
         const browser = pickBrowser(attempt);
         let proxyUrl;
 
-        if (proxySupplier) {
+        if (proxySupplier && !proxyDisabled) {
             try {
                 proxyUrl = await proxySupplier();
             } catch (error) {
@@ -423,7 +440,7 @@ const requestJson = async ({ buildUrl, headers, proxySupplier, label, attempts =
         } catch (error) {
             lastError = withDiagnostics(error, { browser });
             log.debug(`${label}: request error on attempt ${attempt}/${attempts} (browser=${browser}): ${error.message}`);
-            if (attempt < attempts) await sleep(retryDelay(attempt));
+            if (attempt < attempts) await sleep(retryDelay(attempt, undefined, deadline));
             continue;
         }
 
@@ -442,12 +459,22 @@ const requestJson = async ({ buildUrl, headers, proxySupplier, label, attempts =
             } catch {
                 lastError = withDiagnostics(new Error('Invalid JSON response'), { status, bodyKeys: topLevelKeys(body), browser });
                 log.debug(`${label}: non-JSON body on attempt ${attempt}/${attempts} (browser=${browser}).`);
-                if (attempt < attempts) await sleep(retryDelay(attempt));
+                if (attempt < attempts) await sleep(retryDelay(attempt, undefined, deadline));
                 continue;
             }
         }
 
         const bodyKeys = topLevelKeys(body);
+
+        if (status === 407) {
+            lastError = withDiagnostics(new Error('HTTP 407'), { status, bodyKeys, browser });
+            if (proxyUrl && !proxyDisabled) {
+                proxyDisabled = true;
+                log.warning(`${label}: proxy rejected the request (HTTP 407); retrying without a proxy.`);
+            }
+            if (attempt < attempts) await sleep(retryDelay(attempt, parseRetryAfter(response), deadline));
+            continue;
+        }
 
         if (!isRetryableStatus(status)) {
             log.warning(`${label}: non-retryable HTTP ${status} (body-keys=${bodyKeys}).`);
@@ -456,7 +483,7 @@ const requestJson = async ({ buildUrl, headers, proxySupplier, label, attempts =
 
         lastError = withDiagnostics(new Error(`HTTP ${status}`), { status, bodyKeys, browser });
         log.debug(`${label}: HTTP ${status} on attempt ${attempt}/${attempts} (browser=${browser}, proxy=${proxyUrl ? 'yes' : 'no'}, body-keys=${bodyKeys}); rotating fingerprint and exit IP.`);
-        if (attempt < attempts) await sleep(retryDelay(attempt, parseRetryAfter(response)));
+        if (attempt < attempts) await sleep(retryDelay(attempt, parseRetryAfter(response), deadline));
     }
 
     throw lastError || new Error('Request failed');
@@ -541,7 +568,9 @@ const fetchCduiPage = async ({ context, offset, count, sortBy, includeSponsored,
 
     const parsed = parseCduiSearchResponse(payload);
     const reportedError = Array.isArray(payload?.errors) ? payload.errors[0]?.message : undefined;
-    if (reportedError && !parsed.products.length) throw new Error(reportedError);
+    if (reportedError && !parsed.products.length) {
+        log.warning(`Listing endpoint reported a soft error (${reportedError}); treating it as no products.`);
+    }
 
     return parsed;
 };
@@ -560,11 +589,11 @@ const describeProxy = (config) => {
     return `apify ${groups} (${config.apifyProxyCountry || 'any country'})`;
 };
 
-await Actor.init();
-
 let exitCode = 0;
 
 try {
+    await Actor.init();
+
     const input = (await Actor.getInput()) || {};
     const {
         startUrl: startUrlInput,
@@ -579,12 +608,15 @@ try {
     const providedStartUrl = trimToUndefined(startUrlInput);
     const keywordInput = trimToUndefined(keywordValue);
 
-    const startUrl = keywordInput ? undefined : providedStartUrl || DEFAULT_SEARCH_URL;
-    const extracted = parseStartUrl(startUrl);
-    const keyword = keywordInput || extracted.keyword;
+    let startUrl = keywordInput ? undefined : (providedStartUrl || DEFAULT_SEARCH_URL);
+    let extracted = parseStartUrl(startUrl);
+    let keyword = keywordInput || extracted.keyword;
 
     if (!keyword) {
-        throw new Error('Missing required input: keyword (or provide a valid startUrl with searchTerm).');
+        log.warning('Could not derive a search from the provided Start URL; falling back to the default Target search.');
+        startUrl = DEFAULT_SEARCH_URL;
+        extracted = parseStartUrl(startUrl);
+        keyword = extracted.keyword || 'coffee';
     }
 
     if (!keywordInput && !providedStartUrl) {
@@ -715,5 +747,11 @@ try {
     log.error(`Actor run failed: ${message}`);
     exitCode = 1;
 } finally {
-    await Actor.exit({ exitCode });
+    try {
+        await Actor.exit({ exitCode });
+    } catch (exitError) {
+        const message = exitError instanceof Error ? exitError.message : String(exitError);
+        log.error(`Actor could not exit cleanly: ${message}`);
+        process.exitCode = exitCode || 1;
+    }
 }
